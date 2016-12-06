@@ -17,6 +17,7 @@
 # Site configuration
 DEFAULT_EMAIL_DOMAIN = 'gmail.com'
 GPG_PATH = 'gpg'
+MIN_BITS=40
 
 import argparse
 import bz2
@@ -37,9 +38,12 @@ ALPHABET_68 = ALPHABET_64 + '.!?/'
 ALPHABET_71 = ALPHABET_64 + '#@$?.!/'
 ALPHABET_84 = ALPHABET_62 + string.punctuation
 
-ALL_ALPHABETS = [string.ascii_lowercase, string.ascii_letters, ALPHABET_32, ALPHABET_36, ALPHABET_62, ALPHABET_64, ALPHABET_68,
+ALL_ALPHABETS = [string.digits, string.ascii_lowercase, string.ascii_letters, ALPHABET_32, ALPHABET_36, ALPHABET_62, ALPHABET_64, ALPHABET_68,
   ALPHABET_71, ALPHABET_84]
 DEFAULT_ALPHABETS = (ALPHABET_62, ALPHABET_71, ALPHABET_71, ALPHABET_71, ALPHABET_84)
+
+def lazy_len(s):
+  return s.__len__()
 
 def base_dir():
   if os.name == 'posix':
@@ -57,6 +61,7 @@ def get_bits(n, generator = os.urandom):
   return result
 
 def create_password(bits, alphabet = ALPHABET_71, generator = os.urandom):
+  alphabet[0] # Force lazy values
   alphabet_size = len(alphabet)
   length = ceil(log(1<<bits) / log(alphabet_size))
   bits = ceil(log(alphabet_size**length) / log(2))
@@ -104,21 +109,91 @@ def defaults():
     config['wordlist'] = os.path.join(base_dir(), config['wordlist'])
   return config
 
+class LazyLength:
+  def __init__(self, future_list, min_len):
+    self.__min_len = min_len
+    self.__future = future_list
+
+  def __eq__(self, v):
+    if self.__min_len > v:
+      return False
+    if self.__future != None:
+      self.__min_len = len(self.__future.result())
+      self.__future = None
+    return self.__min_len == v
+
+  def __gt__(self, v):
+    if self.__min_len > v:
+      return True
+    if self.__future != None:
+      self.__min_len = len(self.__future.result())
+      self.__future = None
+    return self.__min_len > v
+
+  def __ge__(self, v):
+    if self.__min_len >= v:
+      return True
+    if self.__future != None:
+      self.__min_len = len(self.__future.result())
+      self.__future = None
+    return self.__min_len >= v
+
+  def __lt__(self, v):
+    if self.__min_len >= v:
+      return False
+    if self.__future != None:
+      self.__min_len = len(self.__future.result())
+      self.__future = None
+    return self.__min_len < v
+
+  def __le__(self, v):
+    if self.__min_len > v:
+      return False
+    if self.__future != None:
+      self.__min_len = len(self.__future.result())
+      self.__future = None
+    return self.__min_len <= v
+
+class WordList:
+  '''Lazily loads a compressed list of words from disk.'''
+  def __init__(self, path):
+    assert os.path.exists(path)
+    self.__path = path
+    self.__words = None
+
+  def __getitem__(self, index):
+    return self.result()[index]
+
+  def __len__(self):
+    if self.__words == None:
+      return LazyLength(self, 100)
+    else:
+      return len(self.__words)
+
+  def __iter__(self):
+    return iter(self.result())
+
+  def result(self):
+    if self.__words == None:
+      print('Trying to load ' + self.__path)
+      with bz2.BZ2File(self.__path) as wordlist:
+        self.__words = [line.decode('utf8').strip() for line in wordlist.readlines()]
+      self.__path = None
+    return self.__words
+
 def try_load_wordlist(path):
-  print('Trying to load ' + path)
   if os.path.exists(path):
-    with bz2.BZ2File(path) as wordlist:
-      words = [line.decode('utf8').strip() for line in wordlist.readlines()]
-      ALL_ALPHABETS.append(words)
-      ALL_ALPHABETS.append(words)
-      ALL_ALPHABETS.append(words) # Make pass-phrases thee times as likely
+    words = WordList(path)
+    ALL_ALPHABETS.append(words)
+    ALL_ALPHABETS.append(words)
+    ALL_ALPHABETS.append(words) # Make pass-phrases thee times as likely
 
 def shuffle_alphabets(alphabet_len, loop):
   if alphabet_len != None and alphabet_len > 0:
     if alphabet_len < 100:
-      result = [x for x in list(ALL_ALPHABETS) if len(x) == alphabet_len]
+      result = [x for x in list(ALL_ALPHABETS) if lazy_len(x) == alphabet_len]
     else:
-      result = [x for x in list(ALL_ALPHABETS) if len(x) >= alphabet_len]
+      result = [x for x in list(ALL_ALPHABETS) if lazy_len(x) >= alphabet_len]
     if len(result) == 0:
       raise ValueError('No known alphabets of length {0}'.format(alphabet_len))
   elif loop:
@@ -142,9 +217,9 @@ if __name__ == '__main__':
   parser.add_argument('--verbose', action='store_true', help='verbose output')
   parser.add_argument('--note', action='append', dest='notes', help='Note to be added to encrypted data')
   args = parser.parse_args()
-  if args.bits < 40:
+  if args.bits < MIN_BITS:
     parser.print_help()
-    print('\n\nPasswords must be at least 64 bits strong\n') # lie about the limit   
+    print('\n\nPasswords must be at least {0} bits strong\n'.format(max(64, MIN_BITS))) # lie about the limit   
     sys.exit(1)
   gpg_file = os.path.join(base_dir(), args.domain + '.gpg')
   try_load_wordlist(args.wordlist)
