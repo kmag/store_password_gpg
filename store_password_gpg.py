@@ -258,10 +258,13 @@ if __name__ == '__main__':
         print('\n')
     else:
       password = create_password(args.bits, alphabets[0])
-    if args.user == args.email:
-      msg = 'username:  {0}\npassword:  {1}'.format(args.user, password)
-    else:
-      msg = 'username:  {0}\npassword:  {1}\nemail:  {2}'.format(args.user, password, args.email)
+    # Always include domain at the top of the file to prevent domain-switching attack
+    # whene an attacker who can't break the encryption switches files and tricks the
+    # user into using the password for a valuable site on a non-valuable site controlled
+    # by the attacker.
+    msg = 'domain: {0}\nusername:  {1}\npassword:  {2}'.format(args.domain, args.user, password)
+    if args.email != args.user:
+      msg += '\nemail:  ' + args.email
     if args.notes:
       msg += '\nNotes:\n    {0}'.format('\n\n    '.join(args.notes))
     cmd = '{0} -e -r "{1}" --output "{2}"'.format( GPG_PATH, '" -r "'.join(args.keys), gpg_file)
